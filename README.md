@@ -22,8 +22,11 @@ Measured on an RTX 4070 Super (12 GB), 128K context, ~75K-token prompt
 | KV cache (K / V) | Decode (tok/s) | Prefill (tok/s) | VRAM used |
 |---|---|---|---|
 | q8_0 / q4_0 (mixed) | 21.2 | 980 | 11,646 MiB |
-| **q4_0 / q4_0** (this config) | **45.1** | **1,023** | **10,244 MiB** |
+| **q4_0 / q4_0** (this config) | **44.1** | **1,008** | **10,492 MiB** |
 | q8_0 / q8_0 | 40.8 | 958 | 11,780 MiB |
+
+(q4_0/q4_0 figures are medians of 3 from a 2026-10-23 re-baseline;
+the best single run was 45.1 tok/s.)
 
 Both homogeneous pairs take the fast path. `q4_0/q4_0` is the default
 here because it is the fastest *and* frees ~1.4 GiB — on a 12 GB card
@@ -127,9 +130,14 @@ win after the KV fix.
 > [`hermes/extra-body.md`](hermes/extra-body.md) for the gotcha and
 > the `extra_body` fix.
 
-(The fork also offers a server-side `--reasoning-budget` hard cap.
-It's a useful backstop if a client won't send effort properly; this
-config didn't need it once the client behaved.)
+(This config also sets the fork's server-side `--reasoning-budget 2048`
+hard cap as a backstop: if a client ever stops sending effort — an
+update, a provider switch, a malformed request — the server still
+arrests reasoning at 2,048 tokens. Gate-tested 2026-10-23: 10/10
+runaway traces arrested at the cap with complete answers delivered;
+long answers are not truncated (the budget meters reasoning only);
+tool calls stayed well-formed after capped traces. It costs nothing
+on well-behaved turns.)
 
 ## Tuning notes
 
@@ -149,6 +157,28 @@ config didn't need it once the client behaved.)
   are server-side fallbacks; per-request values from the client win.
 - **Reproduce the numbers** with [`bench/depth-harness.ps1`](bench/)
   before and after any change, at ~75K tokens, twice per config.
+
+## Measured and rejected
+
+Three plausible levers were measured on this rig on 2026-10-23 and
+rejected — recorded here so nobody has to re-run them:
+
+- **Batch geometry (`-b 4096` / `-ub 1024`):** cold prefill 1,006
+  tok/s (baseline 1,008), decode 42.9, +384 MiB VRAM. No gain.
+- **`--spec-type ngram-simple`:** draft acceptance 6–18%, decode
+  −2% on both prose and structured JSON. Prompt-lookup drafting
+  needs output that echoes the prompt; agent workloads paraphrase
+  and invent instead.
+- **PQ2_0 pack:** cold prefill 1,041 tok/s (not the ~2× PrismML's
+  throughput table suggests), decode at 75K 40.2 (vs 44.1),
+  VRAM 11,632 MiB. On this fork build and card the larger pack is
+  purely a tax; PTQ1_0 stays.
+
+**Depth price list** (this config): decode is 52.5 tok/s at ~25K
+tokens of context, 48.5 at ~50K, 44.1 at ~75K, and a cold refill
+of those histories takes ~19 s / ~48 s / ~74 s. Living shallower
+is worth roughly +4 tok/s per 25K — the cheapest remaining lever
+is session hygiene, a client-side habit rather than a flag.
 
 ## License
 

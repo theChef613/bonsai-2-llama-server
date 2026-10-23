@@ -70,7 +70,7 @@ services:
       # Measured on an RTX 4070 Super at ~75K tokens of context
       # (details in README.md):
       #   mixed q8/q4 : decode 21.2 tok/s   (the trap)
-      #   q4_0 / q4_0 : decode 45.1 tok/s   (this config, 2.1x)
+      #   q4_0 / q4_0 : decode 44.1 tok/s   (this config, 2.1x median of 3)
       #   q8_0 / q8_0 : decode 40.8 tok/s   (full K fidelity, +VRAM)
       #
       # q4_0/q4_0 also halves KV memory vs q8_0/q8_0 (~1.5 GiB saved
@@ -83,6 +83,17 @@ services:
       - q4_0
       - --cache-type-v
       - q4_0
+      # Server-side reasoning backstop: cap any single response's
+      # reasoning phase at 2,048 tokens regardless of what the
+      # client requested. Gate-tested 2026-10-23: 10/10 runaway
+      # traces arrested at the cap with complete answers delivered,
+      # long answers untruncated (the budget meters reasoning
+      # only), tool calls well-formed after capped traces. Cheap
+      # insurance for the day a client silently stops sending
+      # reasoning_effort — which is exactly how this config's
+      # companion problem was found (see README.md).
+      - --reasoning-budget
+      - "2048"
       # Sampling defaults shipped with this config. Clients can
       # override per-request; these are the fallbacks for requests
       # that don't specify their own.
