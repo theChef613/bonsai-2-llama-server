@@ -1,0 +1,103 @@
+# llama-server — PrismML Ternary Bonsai 2 27B (PTQ1_0 GGUF)
+#
+# Serves Bonsai 2 27B on http://127.0.0.1:18080 (OpenAI-compatible API
+# under /v1) using the PrismML-Eng llama.cpp fork — see the Dockerfile.
+# Stock llama.cpp CANNOT load this model: it rejects the PTQ1_0 tensor
+# type outright. Do not swap in the upstream llama.cpp image.
+#
+# The model file is not in this repo. Download
+# Ternary-Bonsai-2-27B-PTQ1_0.gguf from Hugging Face
+# (prism-ml/Ternary-Bonsai-2-27B-GGUF) into ./models/ first, or point
+# the volume below at the folder that holds it.
+
+services:
+  llama-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: llama-server:prism-b10787
+    container_name: llama-server
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    # Loopback only on the host: the server has no API-key auth, so do
+    # not publish it on a LAN/WAN interface. The server still binds
+    # 0.0.0.0 *inside* the container (see --host below) so Docker's
+    # port publishing can reach it.
+    ports:
+      - "127.0.0.1:18080:8080"
+    volumes:
+      - "./models:/models:ro"
+    command:
+      - -m
+      - /models/Ternary-Bonsai-2-27B-PTQ1_0.gguf
+      # The name clients use in the "model" field of API requests.
+      - --alias
+      - bonsai-2-27b
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8080"
+      # Full 128K context. The model is natively a 262K-context model;
+      # 128K is what fits comfortably on a 12 GB card alongside the
+      # weights (see the KV-cache notes below). Larger cards can raise
+      # this; smaller cards should lower it.
+      - -c
+      - "131072"
+      # Offload every layer to the GPU.
+      - -ngl
+      - "99"
+      # Use the model's embedded Jinja chat template. Required for
+      # correct chat formatting and tool-call behaviour.
+      - --jinja
+      - --flash-attn
+      - "on"
+      # ================================================================
+      # KV CACHE — THE IMPORTANT PART.
+      #
+      # cache-type-k and cache-type-v MUST be homogeneous: both q4_0
+      # or both q8_0. A mixed pair (e.g. K q8_0 / V q4_0) has NO
+      # FlashAttention vector kernel in this fork's CUDA build, so
+      # every attention step silently falls back to converting K/V to
+      # f16 on the fly — the startup log even calls it "slow".
+      #
+      # Measured on an RTX 4070 Super at ~75K tokens of context
+      # (details in README.md):
+      #   mixed q8/q4 : decode 21.2 tok/s   (the trap)
+      #   q4_0 / q4_0 : decode 45.1 tok/s   (this config, 2.1x)
+      #   q8_0 / q8_0 : decode 40.8 tok/s   (full K fidelity, +VRAM)
+      #
+      # q4_0/q4_0 also halves KV memory vs q8_0/q8_0 (~1.5 GiB saved
+      # at 128K), which is what leaves headroom on a 12 GB card.
+      # Long-context summary quality under q4 K was spot-checked and
+      # held up; if you have VRAM to spare and prefer maximum K
+      # fidelity, q8_0/q8_0 is also fast — just never mix them.
+      # ================================================================
+      - --cache-type-k
+      - q4_0
+      - --cache-type-v
+      - q4_0
+      # Sampling defaults shipped with this config. Clients can
+      # override per-request; these are the fallbacks for requests
+      # that don't specify their own.
+      - --temp
+      - "1.0"
+      - --top-p
+      - "0.95"
+      - --top-k
+      - "20"
+      - --min-p
+      - "0.05"
+      # Unload the model after 15 minutes idle to hand the VRAM back
+      # to the rest of the system; the next request reloads it
+      # (budget ~1 minute on a fast disk). Set to 0, or drop the flag,
+      # if you'd rather keep it resident.
+      - --sleep-idle-seconds
+      - "900"
+    restart: unless-stopped

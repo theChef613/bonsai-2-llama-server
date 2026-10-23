@@ -1,0 +1,21 @@
+# Secrets / local env
+.env
+*.env
+
+# Model weights are never committed — download them from Hugging Face
+*.gguf
+
+# The default model directory (holds the downloaded GGUF)
+models/
+
+# Python
+__pycache__/
+*.pyc
+
+# Editors / OS
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db
